@@ -145,11 +145,23 @@ class LineByLineTextDataset(Dataset):
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
-    file_path = args.eval_data_file if evaluate else args.train_data_file
-    if args.line_by_line:
-        return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+    cached_features_file = os.path.join(
+        args.cache_dir,
+        'cached_{}_{}_{}_{}'.format(
+            str(evaluate), args.tokenizer_name, str(args.block_size), str(args.line_by_line)
+        )
+    )
+    if os.path.exists(cached_features_file):
+        logger.info('Loading features from cached file %s', cached_features_file)
+        return torch.load(cached_features_file)
     else:
-        return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        file_path = args.eval_data_file if evaluate else args.train_data_file
+        if args.line_by_line:
+            dataset = LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        else:
+            dataset = TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        torch.save(dataset, cached_features_file)
+        return dataset
 
 
 def set_seed(args):
@@ -233,7 +245,8 @@ def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> T
 def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedTokenizer) -> Tuple[int, float]:
     """ Train the model """
     if args.local_rank in [-1, 0]:
-        tb_writer = SummaryWriter()
+        log_dir = f'./runs/{args.output_dir.split("/")[-1]}'
+        tb_writer = SummaryWriter(log_dir)
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
@@ -287,7 +300,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     # multi-gpu training (should be after apex fp16 initialization)
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
-
+    
     # Distributed training (should be after apex fp16 initialization)
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -510,6 +523,11 @@ def main():
         help="Whether distinct lines of text in the dataset are to be handled as distinct sequences.",
     )
     parser.add_argument(
+        "--trygonometric_embedding",
+        action="store_true",
+        help="Use trygonometric embeddings instead of learned one.",
+    )
+    parser.add_argument(
         "--should_continue", action="store_true", help="Whether to continue from latest checkpoint in output_dir"
     )
     parser.add_argument(
@@ -701,6 +719,11 @@ def main():
         config = config_class.from_pretrained(args.model_name_or_path, cache_dir=args.cache_dir)
     else:
         config = config_class()
+    
+    if args.trygonometric_embedding:
+        config.embedding_type = "trygonometric"
+    else:
+        config.embedding_type = "learned"
 
     if args.tokenizer_name:
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name, cache_dir=args.cache_dir)

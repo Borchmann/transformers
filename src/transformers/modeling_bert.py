@@ -140,6 +140,23 @@ ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish, "gelu_
 BertLayerNorm = torch.nn.LayerNorm
 
 
+class PositionalEmbedding(nn.Module):
+    def __init__(self, demb):
+        super().__init__()
+
+        self.demb = demb
+
+        inv_freq = 1 / (10000 ** (torch.arange(0.0, demb, 2.0) / demb))
+        self.register_buffer("inv_freq", inv_freq)
+
+    def forward(self, pos_batch):
+        bsz = pos_batch.shape[0]
+        pos_seq = pos_batch[0]
+        sinusoid_inp = torch.ger(pos_seq.half(), self.inv_freq)
+        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
+        return pos_emb[None, :, :].expand(bsz, -1, -1)
+
+
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings.
     """
@@ -147,7 +164,11 @@ class BertEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
-        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        if config.embedding_type == "learned":
+            self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        elif config.embedding_type == "trygonometric":
+            self.position_embeddings = PositionalEmbedding(config.hidden_size)
+
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
